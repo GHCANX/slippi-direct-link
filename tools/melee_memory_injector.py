@@ -171,53 +171,46 @@ def is_in_name_entry(mem_f, ram_base) -> tuple:
 def pulse_controller_buttons(mem_f, ram_base, buttons: int, frames: int = 8, target_ports=(0, 1)):
     """
     Pulses controller buttons on target ports across `frames` frames (~16ms per frame).
-    Writes to both Melee player inputs table (0x80489C30) and HSD_PadMaster (0x804C1FAC)
-    so input is picked up reliably across frame boundaries and pad renew loops.
+    Writes to both Melee player inputs table (0x80489C30, stride 0x30: +0x08/+0x0C and +0x20/+0x24)
+    and HSD_PadMaster (0x804C1FAC, stride 0x44: +0x00 held, +0x08 instant) as u32 bitmasks.
     """
     try:
-        btn_u16 = buttons & 0xFFFF
-        btn_u32 = buttons
+        btn_u32 = buttons & 0xFFFFFFFF
         for _ in range(frames):
             for p in target_ports:
                 # 1. Melee game input table (0x80489C30 + p * 0x30)
                 input_offset = RAM_OFFSET_PLAYER_INPUTS_BASE + (p * 0x30)
-                mem_f.seek(ram_base + input_offset + 0x0C)
-                curr_instant = struct.unpack(">I", mem_f.read(4))[0]
-                mem_f.seek(ram_base + input_offset + 0x0C)
-                mem_f.write(struct.pack(">I", curr_instant | btn_u32))
+                for field_off in (0x08, 0x0C, 0x20, 0x24):
+                    mem_f.seek(ram_base + input_offset + field_off)
+                    curr = struct.unpack(">I", mem_f.read(4))[0]
+                    mem_f.seek(ram_base + input_offset + field_off)
+                    mem_f.write(struct.pack(">I", curr | btn_u32))
 
-                mem_f.seek(ram_base + input_offset + 0x08)
-                curr_held = struct.unpack(">I", mem_f.read(4))[0]
-                mem_f.seek(ram_base + input_offset + 0x08)
-                mem_f.write(struct.pack(">I", curr_held | btn_u32))
-
-                # 2. HSD_PadMaster (0x804C1FAC + p * 12)
-                hsd_offset = RAM_OFFSET_HSD_PAD_MASTER + (p * 12)
-                mem_f.seek(ram_base + hsd_offset)
-                curr_hsd = struct.unpack(">H", mem_f.read(2))[0]
-                mem_f.seek(ram_base + hsd_offset)
-                mem_f.write(struct.pack(">H", curr_hsd | btn_u16))
+                # 2. HSD_PadMaster (0x804C1FAC + p * 0x44): +0x00 held u32, +0x08 instant u32
+                hsd_offset = RAM_OFFSET_HSD_PAD_MASTER + (p * 0x44)
+                for field_off in (0x00, 0x08):
+                    mem_f.seek(ram_base + hsd_offset + field_off)
+                    curr_hsd = struct.unpack(">I", mem_f.read(4))[0]
+                    mem_f.seek(ram_base + hsd_offset + field_off)
+                    mem_f.write(struct.pack(">I", curr_hsd | btn_u32))
 
             time.sleep(0.016)
 
         # Release buttons
         for p in target_ports:
             input_offset = RAM_OFFSET_PLAYER_INPUTS_BASE + (p * 0x30)
-            mem_f.seek(ram_base + input_offset + 0x0C)
-            curr_instant = struct.unpack(">I", mem_f.read(4))[0]
-            mem_f.seek(ram_base + input_offset + 0x0C)
-            mem_f.write(struct.pack(">I", curr_instant & ~btn_u32))
+            for field_off in (0x08, 0x0C, 0x20, 0x24):
+                mem_f.seek(ram_base + input_offset + field_off)
+                curr = struct.unpack(">I", mem_f.read(4))[0]
+                mem_f.seek(ram_base + input_offset + field_off)
+                mem_f.write(struct.pack(">I", curr & ~btn_u32))
 
-            mem_f.seek(ram_base + input_offset + 0x08)
-            curr_held = struct.unpack(">I", mem_f.read(4))[0]
-            mem_f.seek(ram_base + input_offset + 0x08)
-            mem_f.write(struct.pack(">I", curr_held & ~btn_u32))
-
-            hsd_offset = RAM_OFFSET_HSD_PAD_MASTER + (p * 12)
-            mem_f.seek(ram_base + hsd_offset)
-            curr_hsd = struct.unpack(">H", mem_f.read(2))[0]
-            mem_f.seek(ram_base + hsd_offset)
-            mem_f.write(struct.pack(">H", curr_hsd & ~btn_u16))
+            hsd_offset = RAM_OFFSET_HSD_PAD_MASTER + (p * 0x44)
+            for field_off in (0x00, 0x08):
+                mem_f.seek(ram_base + hsd_offset + field_off)
+                curr_hsd = struct.unpack(">I", mem_f.read(4))[0]
+                mem_f.seek(ram_base + hsd_offset + field_off)
+                mem_f.write(struct.pack(">I", curr_hsd & ~btn_u32))
     except Exception:
         pass
 
