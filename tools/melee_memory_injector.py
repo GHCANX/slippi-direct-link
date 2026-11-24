@@ -42,6 +42,11 @@ RAM_OFFSET_NAME_ENTRY_MGR_PTR = 0x004D6C08     # -0x4A98(r13) pointing to NameEn
 RAM_OFFSET_PLAYER_PORT = 0x004D6C0C            # -0x4A94(r13) active player port byte
 RAM_OFFSET_PLAYER_INPUTS_BASE = 0x00489C30     # Base address of controller inputs table
 
+# GameCube controller button bitmasks
+PAD_TRIGGER_Z = 0x0010
+PAD_BUTTON_START = 0x1000
+PAD_BUTTON_A = 0x0100
+
 def normalize_connect_code(raw: str) -> str:
     if not raw:
         return None
@@ -126,23 +131,103 @@ def find_melee_ram_bases(pid: int):
 
     return ram_bases
 
+def is_in_name_entry(mem_f, ram_base) -> tuple:
+    """Returns (True, r28_address) if Melee is currently on the active NameEntry screen, else (False, 0)."""
+    try:
+        mem_f.seek(ram_base + RAM_OFFSET_NAME_ENTRY_MGR_PTR)
+        ne_mgr_bytes = mem_f.read(4)
+        if len(ne_mgr_bytes) < 4:
+            return False, 0
+        ne_mgr = struct.unpack(">I", ne_mgr_bytes)[0]
+        if not (0x80000000 <= ne_mgr <= 0x81800000):
+            return False, 0
+        mem_f.seek(ram_base + (ne_mgr - 0x80000000 + 0x2C))
+        r28_bytes = mem_f.read(4)
+        if len(r28_bytes) < 4:
+            return False, 0
+        r28 = struct.unpack(">I", r28_bytes)[0]
+        if not (0x80000000 <= r28 <= 0x81800000):
+            return False, 0
+        return True, r28
+    except Exception:
+        return False, 0
+
+def pulse_controller_buttons(mem_f, ram_base, buttons: int, frames: int = 4, target_ports=(0, 1)):
+    """Pulses controller buttons on target ports across `frames` frames (~16ms per frame)."""
+    try:
+        for _ in range(frames):
+            for p in target_ports:
+                input_offset = RAM_OFFSET_PLAYER_INPUTS_BASE + (p * 0x30)
+                mem_f.seek(ram_base + input_offset + 0x0C)
+                curr_instant = struct.unpack(">I", mem_f.read(4))[0]
+                mem_f.seek(ram_base + input_offset + 0x0C)
+                mem_f.write(struct.pack(">I", curr_instant | buttons))
+
+                mem_f.seek(ram_base + input_offset + 0x08)
+                curr_held = struct.unpack(">I", mem_f.read(4))[0]
+                mem_f.seek(ram_base + input_offset + 0x08)
+                mem_f.write(struct.pack(">I", curr_held | buttons))
+
+            time.sleep(0.016)
+
+        for p in target_ports:
+            input_offset = RAM_OFFSET_PLAYER_INPUTS_BASE + (p * 0x30)
+            mem_f.seek(ram_base + input_offset + 0x0C)
+            curr_instant = struct.unpack(">I", mem_f.read(4))[0]
+            mem_f.seek(ram_base + input_offset + 0x0C)
+            mem_f.write(struct.pack(">I", curr_instant & ~buttons))
+
+            mem_f.seek(ram_base + input_offset + 0x08)
+            curr_held = struct.unpack(">I", mem_f.read(4))[0]
+            mem_f.seek(ram_base + input_offset + 0x08)
+            mem_f.write(struct.pack(">I", curr_held & ~buttons))
+    except Exception:
+        pass
+
 def inject_code_into_melee(pid: int, ram_base: int, code: str) -> bool:
-    """Writes the connect code into Melee RAM buffers in the running Dolphin process and refreshes display."""
+    """Writes connect code into Melee RAM, transitions from CSS if needed, renders text, and auto-starts search."""
     sjis_buf = encode_connect_code_3stride(code)
     code_len = len(code)
     mem_path = f"/proc/{pid}/mem"
 
     try:
         with open(mem_path, "r+b", 0) as mem_f:
-            # 1. Write to Primary Connect Code Buffer (0x804A0740)
+            # Determine active player port
+            mem_f.seek(ram_base + RAM_OFFSET_PLAYER_PORT)
+            port_byte = mem_f.read(1)
+            active_port = port_byte[0] if port_byte and port_byte[0] < 4 else 0
+            target_ports = [active_port]
+            for p in (0, 1):
+                if p not in target_ports:
+                    target_ports.append(p)
+
+            # 1. Prime Primary and Secondary Connect Code Buffers (0x804A0740 & 0x804A0760)
             mem_f.seek(ram_base + RAM_OFFSET_DIRECT_CODE_PRIMARY)
             mem_f.write(sjis_buf)
-
-            # 2. Write to Secondary Connect Code Buffer (0x804A0760)
             mem_f.seek(ram_base + RAM_OFFSET_DIRECT_CODE_SECONDARY)
             mem_f.write(sjis_buf)
 
-            # 3. Check AutoComplete Buffer (ACB / ACXB)
+            # 2. Check if currently inside Name Entry screen or on CSS
+            in_ne, r28 = is_in_name_entry(mem_f, ram_base)
+            if not in_ne:
+                # On CSS with character selected: press Start to open Name Entry screen
+                pulse_controller_buttons(mem_f, ram_base, PAD_BUTTON_START, frames=4, target_ports=target_ports)
+
+                # Wait up to 2.0s for Name Entry screen to load
+                start_wait = time.time()
+                while time.time() - start_wait < 2.0:
+                    in_ne, r28 = is_in_name_entry(mem_f, ram_base)
+                    if in_ne:
+                        break
+                    time.sleep(0.040)
+
+            # 3. Always re-write connect code buffers to ensure clean data
+            mem_f.seek(ram_base + RAM_OFFSET_DIRECT_CODE_PRIMARY)
+            mem_f.write(sjis_buf)
+            mem_f.seek(ram_base + RAM_OFFSET_DIRECT_CODE_SECONDARY)
+            mem_f.write(sjis_buf)
+
+            # 4. Update AutoComplete Buffer (ACB / ACXB)
             mem_f.seek(ram_base + RAM_OFFSET_INJ_CHECK_AUTOFILL)
             b_inst_bytes = mem_f.read(4)
             if len(b_inst_bytes) == 4:
@@ -152,7 +237,6 @@ def inject_code_into_melee(pid: int, ram_base: int, code: str) -> bool:
                     if li & 0x02000000:
                         li -= 0x04000000
                     gecko_target = 0x8023CCA4 + li
-                    # IDO_ACB_ADDR is at gecko_target + 0x0C
                     mem_f.seek(ram_base + (gecko_target + 0x0C - 0x80000000))
                     acb_addr = struct.unpack(">I", mem_f.read(4))[0]
                     if 0x80000000 <= acb_addr <= 0x81800000:
@@ -164,70 +248,21 @@ def inject_code_into_melee(pid: int, ram_base: int, code: str) -> bool:
                         mem_f.seek(ram_base + (acb_addr - 0x80000000 + 6))
                         acxb_addr = struct.unpack(">I", mem_f.read(4))[0]
                         if 0x80000000 <= acxb_addr <= 0x81800000:
-                            # ACXB: byte 0 has_suggestion(1) + bytes 1..24 suggestion + byte 25 len
                             mem_f.seek(ram_base + (acxb_addr - 0x80000000))
                             mem_f.write(b"\x01" + sjis_buf + bytes([code_len]))
 
-            # 4. Check active NameEntry screen struct r28
-            mem_f.seek(ram_base + RAM_OFFSET_NAME_ENTRY_MGR_PTR)
-            ne_mgr_bytes = mem_f.read(4)
-            in_name_entry = False
-            r28 = 0
-            if len(ne_mgr_bytes) == 4:
-                ne_mgr = struct.unpack(">I", ne_mgr_bytes)[0]
-                if 0x80000000 <= ne_mgr <= 0x81800000:
-                    mem_f.seek(ram_base + (ne_mgr - 0x80000000 + 0x2C))
-                    r28 = struct.unpack(">I", mem_f.read(4))[0]
-                    if 0x80000000 <= r28 <= 0x81800000:
-                        in_name_entry = True
-                        # Reset cursor position to 0 so Z trigger autocompletes cleanly from start
-                        mem_f.seek(ram_base + (r28 - 0x80000000 + 0x58))
-                        mem_f.write(b"\x00")
+            # 5. Reset typed character count in r28 so Z trigger autocompletes from index 0
+            if in_ne and 0x80000000 <= r28 <= 0x81800000:
+                mem_f.seek(ram_base + (r28 - 0x80000000 + 0x58))
+                mem_f.write(b"\x00")
 
-            # 5. Move hovered option to Confirm button (57)
+            # 6. Set hovered option to Confirm button (57)
             mem_f.seek(ram_base + RAM_OFFSET_MENU_FLOW_DATA + 2)
             mem_f.write(struct.pack(">H", 57))
 
-            # 6. If currently inside NameEntry, pulse the Z button (0x0010)
-            # to trigger Melee's CheckTriggersAndZ autocomplete handler which calls NameEntry_UpdateTypedName (0x8023CE4C)
-            if in_name_entry:
-                mem_f.seek(ram_base + RAM_OFFSET_PLAYER_PORT)
-                port_byte = mem_f.read(1)
-                port = port_byte[0] if port_byte and port_byte[0] < 4 else 0
-                target_ports = [port] if port in (0, 1, 2, 3) else [0]
-                if 0 not in target_ports:
-                    target_ports.append(0)
-
-                # Pulse Z button across multiple frames (~60ms) so Melee input loop catches it
-                for _ in range(4):
-                    for p in target_ports:
-                        input_offset = RAM_OFFSET_PLAYER_INPUTS_BASE + (p * 0x30)
-                        # Set Z in instant buttons (offset +0x0C)
-                        mem_f.seek(ram_base + input_offset + 0x0C)
-                        curr_instant = struct.unpack(">I", mem_f.read(4))[0]
-                        mem_f.seek(ram_base + input_offset + 0x0C)
-                        mem_f.write(struct.pack(">I", curr_instant | 0x0010))
-
-                        # Set Z in held buttons (offset +0x08)
-                        mem_f.seek(ram_base + input_offset + 0x08)
-                        curr_held = struct.unpack(">I", mem_f.read(4))[0]
-                        mem_f.seek(ram_base + input_offset + 0x08)
-                        mem_f.write(struct.pack(">I", curr_held | 0x0010))
-
-                    time.sleep(0.016)
-
-                # Clear Z pulse
-                for p in target_ports:
-                    input_offset = RAM_OFFSET_PLAYER_INPUTS_BASE + (p * 0x30)
-                    mem_f.seek(ram_base + input_offset + 0x0C)
-                    curr_instant = struct.unpack(">I", mem_f.read(4))[0]
-                    mem_f.seek(ram_base + input_offset + 0x0C)
-                    mem_f.write(struct.pack(">I", curr_instant & ~0x0010))
-
-                    mem_f.seek(ram_base + input_offset + 0x08)
-                    curr_held = struct.unpack(">I", mem_f.read(4))[0]
-                    mem_f.seek(ram_base + input_offset + 0x08)
-                    mem_f.write(struct.pack(">I", curr_held & ~0x0010))
+            # 7. If inside Name Entry, pulse Z button to render text and update glyphs
+            if in_ne:
+                pulse_controller_buttons(mem_f, ram_base, PAD_TRIGGER_Z, frames=4, target_ports=target_ports)
 
                 # Ensure hovered option remains Confirm (57) and r28 cursor length is set
                 mem_f.seek(ram_base + RAM_OFFSET_MENU_FLOW_DATA + 2)
@@ -235,6 +270,12 @@ def inject_code_into_melee(pid: int, ram_base: int, code: str) -> bool:
                 if 0x80000000 <= r28 <= 0x81800000:
                     mem_f.seek(ram_base + (r28 - 0x80000000 + 0x58))
                     mem_f.write(bytes([min(code_len, 7)]))
+
+                # Settle frame (~100ms) for Melee text update
+                time.sleep(0.100)
+
+                # 8. Inject press Start (or Start + A on Confirm) to automatically begin searching!
+                pulse_controller_buttons(mem_f, ram_base, PAD_BUTTON_START | PAD_BUTTON_A, frames=4, target_ports=target_ports)
 
             return True
     except Exception as e:
