@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Slippi Direct Link — Test & Demo</title>
+  <style>
+    :root {
+      --bg: #100b1d;
+      --card-bg: #1c152e;
+      --accent: #28ca75;
+      --accent-hover: #32e284;
+      --accent-teams: #38bdf8;
+      --text: #f3f4f6;
+      --text-muted: #9ca3af;
+      --border: #2e2646;
+    }
+    body {
+      margin: 0;
+      padding: 2rem;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      justify-content: center;
+    }
+    .container {
+      max-width: 680px;
+      width: 100%;
+    }
+    h1 {
+      font-size: 2rem;
+      margin-bottom: 0.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    p.lead {
+      color: var(--text-muted);
+      margin-top: 0;
+      margin-bottom: 2rem;
+      line-height: 1.5;
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+    label {
+      display: block;
+      font-size: 0.875rem;
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+    }
+    .input-group {
+      display: flex;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }
+    input[type="text"] {
+      flex: 1;
+      background: #110c1f;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+      color: #fff;
+      font-size: 1.1rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    input[type="text"]:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    select {
+      background: #110c1f;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+      color: #fff;
+      font-size: 1rem;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      background: var(--accent);
+      color: #0d1e15;
+      font-weight: 700;
+      font-size: 1.05rem;
+      text-decoration: none;
+      padding: 0.85rem 1.5rem;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      transition: background 0.15s ease, transform 0.1s ease;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    .btn:hover {
+      background: var(--accent-hover);
+      transform: translateY(-1px);
+    }
+    .btn:active {
+      transform: translateY(0);
+    }
+    .btn-teams {
+      background: var(--accent-teams);
+      color: #082132;
+    }
+    .btn-teams:hover {
+      background: #60a5fa;
+    }
+    .uri-preview {
+      background: #0f0a1c;
+      border: 1px dashed var(--border);
+      border-radius: 6px;
+      padding: 0.75rem 1rem;
+      font-family: monospace;
+      font-size: 0.95rem;
+      color: #a78bfa;
+      word-break: break-all;
+      margin-bottom: 1rem;
+    }
+    .sample-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+      margin-top: 1rem;
+    }
+    .sample-btn {
+      background: #251c3d;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem;
+      color: var(--text);
+      cursor: pointer;
+      font-weight: 600;
+      text-align: left;
+    }
+    .sample-btn:hover {
+      border-color: var(--accent);
+      background: #2f234c;
+    }
+    .badge {
+      display: inline-block;
+      font-size: 0.75rem;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      margin-left: 0.5rem;
+      background: rgba(40, 202, 117, 0.2);
+      color: var(--accent);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>⚔️ Slippi Direct Link <span class="badge">slippi://connect</span></h1>
+    <p class="lead">
+      Test click-to-connect deep linking into Super Smash Bros. Melee Netplay. Clicking any connect button opens Slippi Launcher, stages the opponent's code in Dolphin, and auto-queues in Direct or Teams mode.
+    </p>
+
+    <div class="card">
+      <label for="code-input">Opponent Connect Code</label>
+      <div class="input-group">
+        <input type="text" id="code-input" value="FOX-123" placeholder="e.g. FOX-123 or MARTH#456" maxlength="8">
+        <select id="mode-select">
+          <option value="direct">Direct Mode (1v1)</option>
+          <option value="teams">Teams Mode (Doubles)</option>
+        </select>
+      </div>
+
+      <label>Generated URI</label>
+      <div class="uri-preview" id="uri-display">slippi://connect?code=FOX-123&mode=direct</div>
+
+      <a id="connect-link" href="slippi://connect?code=FOX-123&mode=direct" class="btn">
+        🚀 Connect with <span id="btn-code">FOX#123</span>
+      </a>
+    </div>
+
+    <div class="card">
+      <label>Quick Presets</label>
+      <div class="sample-grid">
+        <button class="sample-btn" onclick="setPreset('IBDW#0', 'direct')">
+          <div>🦊 <strong>IBDW#0</strong></div>
+          <small style="color:var(--text-muted)">Direct 1v1</small>
+        </button>
+        <button class="sample-btn" onclick="setPreset('MANG#0', 'direct')">
+          <div>🦅 <strong>MANG#0</strong></div>
+          <small style="color:var(--text-muted)">Direct 1v1</small>
+        </button>
+        <button class="sample-btn" onclick="setPreset('HBOX#1', 'teams')">
+          <div>🎈 <strong>HBOX#1</strong></div>
+          <small style="color:var(--text-muted)">Teams (Doubles)</small>
+        </button>
+        <button class="sample-btn" onclick="setPreset('ZAIN#0', 'direct')">
+          <div>🗡️ <strong>ZAIN#0</strong></div>
+          <small style="color:var(--text-muted)">Direct 1v1</small>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const codeInput = document.getElementById("code-input");
+    const modeSelect = document.getElementById("mode-select");
+    const uriDisplay = document.getElementById("uri-display");
+    const connectLink = document.getElementById("connect-link");
+    const btnCode = document.getElementById("btn-code");
+
+    function update() {
+      let raw = codeInput.value.trim().toUpperCase();
+      let mode = modeSelect.value;
+
+      // Normalization
+      let normalized = raw.replace(/-/g, "#");
+      let urlCode = raw.replace(/#/g, "-");
+
+      let uri = `slippi://connect?code=${encodeURIComponent(urlCode)}&mode=${mode}`;
+      uriDisplay.textContent = uri;
+      connectLink.href = uri;
+      btnCode.textContent = normalized || "Opponent";
+
+      if (mode === "teams") {
+        connectLink.className = "btn btn-teams";
+      } else {
+        connectLink.className = "btn";
+      }
+    }
+
+    function setPreset(code, mode) {
+      codeInput.value = code;
+      modeSelect.value = mode;
+      update();
+    }
+
+    codeInput.addEventListener("input", update);
+    modeSelect.addEventListener("change", update);
+    update();
+  </script>
+</body>
+</html>
