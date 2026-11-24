@@ -88,3 +88,21 @@ Stored in the Netplay Slippi config folder alongside `direct-codes.json` and `us
 - **Never interrupt active matches:** Polling only occurs on Main Menu / Online Submenu and Idle CSS (`MM_STATE_IDLE`).
 - **Never force-disconnect an opponent:** If already connected/searching, the pending code waits until the user disconnects (or expires via TTL).
 - **Launcher confirmation gate:** `slippi-launcher` prompts the user before dispatching a `slippi://connect` request from an external browser link.
+
+---
+
+## 6. Live Process Memory Injection (Zero-Restart Active Session Bridge)
+
+For instances where Melee is already open and running in an active Dolphin session:
+1. **Target Discovery:**
+   - Scans `/proc/[0-9]*/cmdline` and `/proc/[pid]/maps` for Dolphin processes (`dolphin-emu`, `AppRun.wrapped`, `Slippi_Online`).
+   - Identifies the 32MB/24MB emulated GameCube RAM block (`0x80000000` guest base) by validating the Melee boot header `GALE01\x00\x02` and DVD magic `0xC2339F3D` at offset `0x1C`.
+2. **Memory Buffer Injection:**
+   - Converts the connect code to 24-byte fullwidth Shift-JIS with 3-byte stride (`[byte0, byte1, 0x00]`).
+   - Writes directly to:
+     - Primary Connect Code buffer: `0x804A0740`
+     - Secondary Connect Code buffer: `0x804A0760`
+     - Menu Flow Data: `0x804A04F0` (sets `MFD_HOVERED_OPTION = 57` to hover the Confirm button).
+3. **Window Activation:**
+   - Focuses the Dolphin window using Sway IPC (`swaymsg '[title="(?i)Faster Melee"] focus'`) or X11/Wayland window managers.
+   - Result: instantaneous in-game updates while Melee remains running without emulator restarts.
