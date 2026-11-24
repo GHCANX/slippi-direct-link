@@ -7,6 +7,7 @@ without requiring any game restart, Gecko reload, or custom emulator build.
 """
 
 import glob
+import json
 import os
 import re
 import struct
@@ -354,20 +355,48 @@ def inject_connect_code(raw_code: str) -> dict:
     }
 
 def focus_dolphin_window():
-    """Brings the active Melee / Dolphin window to the foreground."""
+    """Brings the active Melee / Dolphin game render window (not the launcher) to the foreground."""
     try:
-        subprocess.run(["swaymsg", '[title="(?i)Faster Melee"] focus'], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(["swaymsg", '[class="(?i)Apprun"] focus'], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(["swaymsg", '[class="(?i)dolphin"] focus'], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        tree = json.loads(subprocess.check_output(["swaymsg", "-t", "get_tree"], timeout=1))
+
+        def get_all_views(node):
+            views = []
+            if node.get("name") or node.get("window_properties"):
+                views.append(node)
+            for c in node.get("nodes", []) + node.get("floating_nodes", []):
+                views.extend(get_all_views(c))
+            return views
+
+        views = get_all_views(tree)
+        target_con = None
+        for v in views:
+            name = v.get("name") or ""
+            wp = v.get("window_properties") or {}
+            title = wp.get("title") or ""
+            if name == "Dolphin" or title == "Dolphin":
+                target_con = v.get("id")
+                break
+            if "GALE01" in title or "Super Smash Bros" in title:
+                target_con = v.get("id")
+                break
+
+        if target_con:
+            subprocess.run(["swaymsg", f"[con_id={target_con}] focus"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+
+        subprocess.run(["swaymsg", '[title="^Dolphin$"] focus'], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["swaymsg", '[title="(?i)GALE01"] focus'], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["swaymsg", '[title="(?i)Super Smash Bros"] focus'], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
         pass
+    return False
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: melee_memory_injector.py <CONNECT_CODE>")
         sys.exit(1)
 
+    focus_dolphin_window()
+    time.sleep(0.100)
     result = inject_connect_code(sys.argv[1])
     print(result)
-    if result["success"]:
-        focus_dolphin_window()
