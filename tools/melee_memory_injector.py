@@ -52,6 +52,49 @@ PAD_TRIGGER_Z = 0x0010
 PAD_BUTTON_START = 0x1000
 PAD_BUTTON_A = 0x0100
 
+PIPE_PORT_INDEX = 3  # Port 4 (0-indexed) dedicated to Pipe/0/slippi_direct_link
+PIPE_CANDIDATE_PATHS = [
+    os.path.expanduser("~/.config/SlippiOnline/Pipes/slippi_direct_link"),
+    os.path.expanduser("~/.config/slippi-dolphin/netplay-beta/Pipes/slippi_direct_link"),
+    os.path.expanduser("~/.config/slippi-dolphin/netplay/Pipes/slippi_direct_link"),
+    os.path.expanduser("~/AppImages/MeleeUnlocked-0.9.209/User/Pipes/slippi_direct_link"),
+]
+
+def send_pipe_button(button_name: str, hold_sec: float = 0.12) -> bool:
+    """
+    Sends a PRESS/RELEASE button event to all active Dolphin named pipes.
+    Returns True if at least one Dolphin process had the pipe open for reading.
+    """
+    sent = False
+    open_fds = []
+    for path in PIPE_CANDIDATE_PATHS:
+        if not os.path.exists(path):
+            continue
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_NONBLOCK)
+            os.write(fd, f"PRESS {button_name}\n".encode("ascii"))
+            open_fds.append(fd)
+            sent = True
+        except OSError:
+            # ENXIO means no Dolphin reader is currently attached to this pipe
+            continue
+
+    if not open_fds:
+        return False
+
+    time.sleep(hold_sec)
+    for fd in open_fds:
+        try:
+            os.write(fd, f"RELEASE {button_name}\n".encode("ascii"))
+        except OSError:
+            pass
+        finally:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+    return sent
+
 def normalize_connect_code(raw: str) -> str:
     if not raw:
         return None
@@ -246,8 +289,9 @@ def inject_code_into_melee(pid: int, ram_base: int, code: str) -> bool:
             # 2. Check if currently inside Name Entry screen or on CSS
             in_ne, r28 = is_in_name_entry(mem_f, ram_base)
             if not in_ne:
-                # On CSS with character selected: pulse Start button (8 frames = ~130ms) to open Name Entry
-                pulse_controller_buttons(mem_f, ram_base, PAD_BUTTON_START, frames=8, target_ports=target_ports)
+                # On CSS with character selected: press Start via Dolphin Pipe (fallback to RAM pulse)
+                if not send_pipe_button("START", hold_sec=0.12):
+                    pulse_controller_buttons(mem_f, ram_base, PAD_BUTTON_START, frames=8, target_ports=target_ports)
 
                 # Wait up to 3.0s for Name Entry screen to load
                 start_wait = time.time()
@@ -300,24 +344,38 @@ def inject_code_into_melee(pid: int, ram_base: int, code: str) -> bool:
             mem_f.seek(ram_base + RAM_OFFSET_MENU_FLOW_DATA + 2)
             mem_f.write(struct.pack(">H", 57))
 
-            # 7. If inside Name Entry, pulse Z button to render text and update glyphs
+            # 7. If inside Name Entry, press Z to render text and Start to confirm search
             if in_ne:
-                # Pulse Z for 8 frames (~130ms) to ensure autocomplete registers
-                pulse_controller_buttons(mem_f, ram_base, PAD_TRIGGER_Z, frames=8, target_ports=target_ports)
+                # Save original Name Entry active port and temporarily route to Pipe Port 4 (index 3)
+                mem_f.seek(ram_base + RAM_OFFSET_PLAYER_PORT)
+                orig_ne_port = mem_f.read(1)
+                orig_port_val = orig_ne_port[0] if orig_ne_port else 0
+                mem_f.seek(ram_base + RAM_OFFSET_PLAYER_PORT)
+                mem_f.write(bytes([PIPE_PORT_INDEX]))
+                try:
+                    # Press Z via Pipe (fallback to RAM pulse) to trigger autocomplete & glyph render
+                    if not send_pipe_button("Z", hold_sec=0.10):
+                        mem_f.seek(ram_base + RAM_OFFSET_PLAYER_PORT)
+                        mem_f.write(bytes([orig_port_val]))
+                        pulse_controller_buttons(mem_f, ram_base, PAD_TRIGGER_Z, frames=8, target_ports=target_ports)
 
-                # Ensure hovered option remains Confirm (57) and r28 cursor length is set
-                mem_f.seek(ram_base + RAM_OFFSET_MENU_FLOW_DATA + 2)
-                mem_f.write(struct.pack(">H", 57))
-                if 0x80000000 <= r28 <= 0x81800000:
-                    mem_f.seek(ram_base + (r28 - 0x80000000 + 0x58))
-                    mem_f.write(bytes([min(code_len, 7)]))
+                    # Ensure hovered option remains Confirm (57) and r28 cursor length is set
+                    mem_f.seek(ram_base + RAM_OFFSET_MENU_FLOW_DATA + 2)
+                    mem_f.write(struct.pack(">H", 57))
+                    if 0x80000000 <= r28 <= 0x81800000:
+                        mem_f.seek(ram_base + (r28 - 0x80000000 + 0x58))
+                        mem_f.write(bytes([min(code_len, 7)]))
 
-                # Allow 300ms for Melee text update glyph generation and chime sound to settle
-                time.sleep(0.300)
+                    # Allow 250ms for Melee text update glyph generation and chime sound to settle
+                    time.sleep(0.250)
 
-                # 8. Inject press Start (or Start + A on Confirm) to automatically begin searching!
-                # Pulse for 8 frames (~130ms) to ensure clean confirm recognition
-                pulse_controller_buttons(mem_f, ram_base, PAD_BUTTON_START | PAD_BUTTON_A, frames=8, target_ports=target_ports)
+                    # 8. Press Start via Pipe (fallback to RAM pulse) to submit Confirm and start searching
+                    if not send_pipe_button("START", hold_sec=0.12):
+                        pulse_controller_buttons(mem_f, ram_base, PAD_BUTTON_START | PAD_BUTTON_A, frames=8, target_ports=target_ports)
+                finally:
+                    # Restore original Name Entry port
+                    mem_f.seek(ram_base + RAM_OFFSET_PLAYER_PORT)
+                    mem_f.write(bytes([orig_port_val]))
 
             return True
     except Exception as e:
